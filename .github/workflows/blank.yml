@@ -1,4 +1,4 @@
-ame: Generate Changelog from PR Descriptions
+name: Generate Changelog from PR Descriptions
 
 on:
   workflow_dispatch:
