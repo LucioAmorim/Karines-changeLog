@@ -1,0 +1,178 @@
+ame: Generate Changelog from PR Descriptions
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_branch:
+        description: "Branch base para buscar PRs mesclados"
+        required: true
+        default: "master"
+      since_tag:
+        description: "Tag inicial (opcional). Se vazio, usa a última tag"
+        required: false
+        default: ""
+      output_file:
+        description: "Arquivo de changelog"
+        required: true
+        default: "CHANGELOG.md"
+      max_prs:
+        description: "Número máximo de PRs a incluir"
+        required: true
+        default: "100"
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  generate-changelog:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ -n "${{ inputs.since_tag }}" ]; then
+            echo "tag=${{ inputs.since_tag }}" >> $GITHUB_OUTPUT
+          else
+            tag=$(git describe --tags --abbrev=0 2>/dev/null || true)
+            echo "tag=$tag" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Resolve since date
+        id: since
+        run: |
+          if [ -n "${{ steps.tag.outputs.tag }}" ]; then
+            date=$(git log -1 --format=%cI "${{ steps.tag.outputs.tag }}")
+          else
+            date="1970-01-01T00:00:00Z"
+          fi
+          echo "since_date=$date" >> $GITHUB_OUTPUT
+
+      - name: Generate changelog content
+        uses: actions/github-script@v7
+        env:
+          BASE_BRANCH: ${{ inputs.base_branch }}
+          SINCE_DATE: ${{ steps.since.outputs.since_date }}
+          OUTPUT_FILE: ${{ inputs.output_file }}
+          MAX_PRS: ${{ inputs.max_prs }}
+          SINCE_TAG: ${{ steps.tag.outputs.tag }}
+        with:
+          script: |
+            const fs = require('fs');
+
+            const baseBranch = process.env.BASE_BRANCH;
+            const sinceDate = process.env.SINCE_DATE;
+            const outputFile = process.env.OUTPUT_FILE;
+            const maxPrs = Number(process.env.MAX_PRS || 100);
+            const sinceTag = process.env.SINCE_TAG || '';
+
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            const query = `repo:${owner}/${repo} is:pr is:merged base:${baseBranch} merged:>=${sinceDate}`;
+
+            const search = async () => {
+              const items = [];
+              let page = 1;
+              const perPage = 100;
+
+              while (items.length < maxPrs) {
+                const { data } = await github.rest.search.issuesAndPullRequests({
+                  q: query,
+                  per_page: perPage,
+                  page
+                });
+
+                if (!data.items.length) break;
+
+                items.push(...data.items);
+                if (data.items.length < perPage) break;
+                page += 1;
+              }
+
+              return items.slice(0, maxPrs);
+            };
+
+            const cleanBody = (body = '') => {
+              return body
+                .replace(/<!--[\s\S]*?-->/g, '')
+                .replace(/\r\n/g, '\n')
+                .trim();
+            };
+
+            const formatBody = (body) => {
+              if (!body) return [];
+              return body.split('\n').map(line => `  > ${line}`);
+            };
+
+            const prs = await search();
+
+            if (!prs.length) {
+              core.setFailed('Nenhum PR mesclado encontrado no período.');
+              return;
+            }
+
+            const detailed = [];
+            for (const item of prs) {
+              const { data: pr } = await github.rest.pulls.get({
+                owner,
+                repo,
+                pull_number: item.number
+              });
+
+              detailed.push({
+                number: pr.number,
+                title: pr.title,
+                url: pr.html_url,
+                user: pr.user?.login || 'unknown',
+                body: cleanBody(pr.body || '')
+              });
+            }
+
+            const today = new Date().toISOString().split('T')[0];
+            const periodLabel = sinceTag ? `Desde ${sinceTag}` : `Desde ${sinceDate}`;
+
+            const lines = [];
+            lines.push(`## ${today}`);
+            lines.push('');
+            lines.push(`### ${periodLabel}`);
+            lines.push('');
+
+            for (const pr of detailed) {
+              lines.push(`- [#${pr.number}](${pr.url}) ${pr.title} (@${pr.user})`);
+              if (pr.body) {
+                lines.push('  - Descrição:');
+                lines.push(...formatBody(pr.body));
+              }
+              lines.push('');
+            }
+
+            const section = lines.join('\n').trimEnd() + '\n\n';
+            const header = '# Changelog\n\n';
+
+            let existing = '';
+            if (fs.existsSync(outputFile)) {
+              existing = fs.readFileSync(outputFile, 'utf8');
+            }
+
+            if (!existing.startsWith('# Changelog')) {
+              existing = header + existing.trimStart();
+            }
+
+            const updated = existing.replace(header, header + section);
+            fs.writeFileSync(outputFile, updated, 'utf8');
+
+      - name: Create PR
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "docs: atualizar changelog"
+          title: "docs: atualizar changelog"
+          body: "CHANGELOG gerado automaticamente a partir das descrições dos PRs."
+          branch: "automation/changelog-pr-body-${{ github.run_id }}"
+          delete-branch: true
+          labels: "documentation"
