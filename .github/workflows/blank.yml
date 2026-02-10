@@ -3,10 +3,10 @@ name: Generate Changelog from PR Descriptions
 on:
   workflow_dispatch:
     inputs:
-      base_branch:
-        description: "Branch base para buscar PRs mesclados"
+      base_branches:
+        description: "Branches base para buscar PRs mesclados (separadas por vírgula)"
         required: true
-        default: "master"
+        default: "master,main"
       output_file:
         description: "Arquivo de changelog"
         required: true
@@ -32,21 +32,28 @@ jobs:
       - name: Generate changelog content
         uses: actions/github-script@v7
         env:
-          BASE_BRANCH: ${{ inputs.base_branch }}
+          BASE_BRANCHES: ${{ inputs.base_branches }}
           OUTPUT_FILE: ${{ inputs.output_file }}
           MAX_PRS: ${{ inputs.max_prs }}
         with:
           script: |
             const fs = require('fs');
 
-            const baseBranch = process.env.BASE_BRANCH;
+            const baseBranches = (process.env.BASE_BRANCHES || '')
+              .split(',')
+              .map(item => item.trim())
+              .filter(Boolean);
             const outputFile = process.env.OUTPUT_FILE;
             const maxPrs = Number(process.env.MAX_PRS || 100);
 
             const owner = context.repo.owner;
             const repo = context.repo.repo;
 
-            const query = `repo:${owner}/${repo} is:pr is:merged base:${baseBranch}`;
+            const baseQuery = baseBranches.length
+              ? baseBranches.map(branch => `base:${branch}`).join(' OR ')
+              : '';
+
+            const query = `repo:${owner}/${repo} is:pr is:merged ${baseQuery}`.trim();
 
             const search = async () => {
               const items = [];
@@ -85,7 +92,7 @@ jobs:
             const prs = await search();
 
             if (!prs.length) {
-              core.setFailed('Nenhum PR mesclado encontrado no período.');
+              core.warning('Nenhum PR mesclado encontrado.');
               return;
             }
 
