@@ -7,10 +7,6 @@ on:
         description: "Branch base para buscar PRs mesclados"
         required: true
         default: "master"
-      since_tag:
-        description: "Tag inicial (opcional). Se vazio, usa a última tag"
-        required: false
-        default: ""
       output_file:
         description: "Arquivo de changelog"
         required: true
@@ -33,48 +29,24 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Resolve tag
-        id: tag
-        run: |
-          if [ -n "${{ inputs.since_tag }}" ]; then
-            echo "tag=${{ inputs.since_tag }}" >> $GITHUB_OUTPUT
-          else
-            tag=$(git describe --tags --abbrev=0 2>/dev/null || true)
-            echo "tag=$tag" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Resolve since date
-        id: since
-        run: |
-          if [ -n "${{ steps.tag.outputs.tag }}" ]; then
-            date=$(git log -1 --format=%cI "${{ steps.tag.outputs.tag }}")
-          else
-            date="1970-01-01T00:00:00Z"
-          fi
-          echo "since_date=$date" >> $GITHUB_OUTPUT
-
       - name: Generate changelog content
         uses: actions/github-script@v7
         env:
           BASE_BRANCH: ${{ inputs.base_branch }}
-          SINCE_DATE: ${{ steps.since.outputs.since_date }}
           OUTPUT_FILE: ${{ inputs.output_file }}
           MAX_PRS: ${{ inputs.max_prs }}
-          SINCE_TAG: ${{ steps.tag.outputs.tag }}
         with:
           script: |
             const fs = require('fs');
 
             const baseBranch = process.env.BASE_BRANCH;
-            const sinceDate = process.env.SINCE_DATE;
             const outputFile = process.env.OUTPUT_FILE;
             const maxPrs = Number(process.env.MAX_PRS || 100);
-            const sinceTag = process.env.SINCE_TAG || '';
 
             const owner = context.repo.owner;
             const repo = context.repo.repo;
 
-            const query = `repo:${owner}/${repo} is:pr is:merged base:${baseBranch} merged:>=${sinceDate}`;
+            const query = `repo:${owner}/${repo} is:pr is:merged base:${baseBranch}`;
 
             const search = async () => {
               const items = [];
@@ -135,12 +107,8 @@ jobs:
             }
 
             const today = new Date().toISOString().split('T')[0];
-            const periodLabel = sinceTag ? `Desde ${sinceTag}` : `Desde ${sinceDate}`;
-
             const lines = [];
             lines.push(`## ${today}`);
-            lines.push('');
-            lines.push(`### ${periodLabel}`);
             lines.push('');
 
             for (const pr of detailed) {
