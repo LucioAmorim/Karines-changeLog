@@ -49,11 +49,21 @@ jobs:
             const owner = context.repo.owner;
             const repo = context.repo.repo;
 
-            const baseQuery = baseBranches.length
-              ? baseBranches.map(branch => `base:${branch}`).join(' OR ')
+            const fallbackBranches = ['master', 'main'];
+            const branches = baseBranches.length ? baseBranches : fallbackBranches;
+
+            const baseQuery = branches.length
+              ? `(${branches.map(branch => `base:${branch}`).join(' OR ')})`
               : '';
 
-            const query = `repo:${owner}/${repo} is:pr is:merged ${baseQuery}`.trim();
+            const queryParts = [
+              `repo:${owner}/${repo}`,
+              'is:pr',
+              'is:merged',
+              baseQuery
+            ].filter(Boolean);
+
+            const query = queryParts.join(' ').trim();
 
             const search = async () => {
               const items = [];
