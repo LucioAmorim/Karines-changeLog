@@ -19,6 +19,8 @@ on:
 permissions:
   contents: write
   pull-requests: read
+  issues: read
+  metadata: read
 
 jobs:
   generate-changelog:
