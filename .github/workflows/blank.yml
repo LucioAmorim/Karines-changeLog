@@ -19,7 +19,6 @@ on:
 permissions:
   contents: write
   pull-requests: read
-  issues: read
 
 jobs:
   generate-changelog:
@@ -53,40 +52,17 @@ jobs:
             const fallbackBranches = ['master', 'main'];
             const branches = baseBranches.length ? baseBranches : fallbackBranches;
 
-            const baseQuery = branches.length
-              ? `(${branches.map(branch => `base:${branch}`).join(' OR ')})`
-              : '';
+            const listMerged = async (base) => {
+              const params = {
+                owner,
+                repo,
+                state: 'closed',
+                per_page: 100,
+                ...(base ? { base } : {})
+              };
 
-            const queryParts = [
-              `repo:${owner}/${repo}`,
-              'is:pr',
-              'is:merged',
-              baseQuery
-            ].filter(Boolean);
-
-            const query = queryParts.join(' ').trim();
-            const fallbackQuery = `repo:${owner}/${repo} is:pr is:merged`;
-
-            const search = async () => {
-              const items = [];
-              let page = 1;
-              const perPage = 100;
-
-              while (items.length < maxPrs) {
-                const { data } = await github.rest.search.issuesAndPullRequests({
-                  q: query,
-                  per_page: perPage,
-                  page
-                });
-
-                if (!data.items.length) break;
-
-                items.push(...data.items);
-                if (data.items.length < perPage) break;
-                page += 1;
-              }
-
-              return items.slice(0, maxPrs);
+              const prs = await github.paginate(github.rest.pulls.list, params);
+              return prs.filter(pr => pr.merged_at);
             };
 
             const cleanBody = (body = '') => {
@@ -101,33 +77,25 @@ jobs:
               return body.split('\n').map(line => `  > ${line}`);
             };
 
-            let prs = await search();
+            let prs = [];
+
+            for (const base of branches) {
+              const merged = await listMerged(base);
+              prs.push(...merged);
+            }
 
             if (!prs.length) {
-              const fallbackSearch = async () => {
-                const items = [];
-                let page = 1;
-                const perPage = 100;
-
-                while (items.length < maxPrs) {
-                  const { data } = await github.rest.search.issuesAndPullRequests({
-                    q: fallbackQuery,
-                    per_page: perPage,
-                    page
-                  });
-
-                  if (!data.items.length) break;
-
-                  items.push(...data.items);
-                  if (data.items.length < perPage) break;
-                  page += 1;
-                }
-
-                return items.slice(0, maxPrs);
-              };
-
-              prs = await fallbackSearch();
+              prs = await listMerged();
             }
+
+            const seen = new Set();
+            prs = prs
+              .filter(pr => {
+                if (seen.has(pr.number)) return false;
+                seen.add(pr.number);
+                return true;
+              })
+              .slice(0, maxPrs);
 
             if (!prs.length) {
               core.warning('Nenhum PR mesclado encontrado.');
@@ -135,13 +103,7 @@ jobs:
             }
 
             const detailed = [];
-            for (const item of prs) {
-              const { data: pr } = await github.rest.pulls.get({
-                owner,
-                repo,
-                pull_number: item.number
-              });
-
+            for (const pr of prs) {
               detailed.push({
                 number: pr.number,
                 title: pr.title,
