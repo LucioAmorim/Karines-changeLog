@@ -64,6 +64,7 @@ jobs:
             ].filter(Boolean);
 
             const query = queryParts.join(' ').trim();
+            const fallbackQuery = `repo:${owner}/${repo} is:pr is:merged`;
 
             const search = async () => {
               const items = [];
@@ -99,7 +100,33 @@ jobs:
               return body.split('\n').map(line => `  > ${line}`);
             };
 
-            const prs = await search();
+            let prs = await search();
+
+            if (!prs.length) {
+              const fallbackSearch = async () => {
+                const items = [];
+                let page = 1;
+                const perPage = 100;
+
+                while (items.length < maxPrs) {
+                  const { data } = await github.rest.search.issuesAndPullRequests({
+                    q: fallbackQuery,
+                    per_page: perPage,
+                    page
+                  });
+
+                  if (!data.items.length) break;
+
+                  items.push(...data.items);
+                  if (data.items.length < perPage) break;
+                  page += 1;
+                }
+
+                return items.slice(0, maxPrs);
+              };
+
+              prs = await fallbackSearch();
+            }
 
             if (!prs.length) {
               core.warning('Nenhum PR mesclado encontrado.');
